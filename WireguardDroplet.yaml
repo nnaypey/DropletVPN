@@ -1,0 +1,91 @@
+---
+- name: Configure Wireguard VPN Server
+  hosts: localhost
+  become: yes
+  tasks:
+    - name: Update apt packages
+      apt:
+        update_cache: yes
+
+    - name: Install Wireguard
+      apt:
+        name: wireguard
+
+    - name: Generate server keys
+      shell: |
+        cd /etc/wireguard
+        umask 077
+        server_private_key=$(wg genkey)
+        echo "$server_private_key" | sudo tee privatekey > /dev/null
+        server_public_key=$(echo "$server_private_key" | wg pubkey)
+        echo "$server_public_key" | sudo tee publickey > /dev/null
+
+    - name: Fetch server private key
+      set_fact:
+        server_private_key: "{{ lookup('file', '/etc/wireguard/privatekey') }}"
+
+    - name: Set Wireguard configuration
+      copy:
+        dest: /etc/wireguard/wg0.conf
+        content: |
+          [Interface]
+          PrivateKey = {{ server_private_key }}
+          Address = 10.10.0.1/24
+          SaveConfig = true
+          PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o ens3 -j MASQUERADE
+          PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o ens3 -j MASQUERADE
+          ListenPort = 51820
+
+    - name: ensure IP forwarding is enabled
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: "1"
+        state: present
+        reload: true
+        sysctl_set: yes
+
+    - name: Start Wireguard interface
+      shell: wg-quick up wg0
+
+- name: Generate Wireguard client configuration
+  hosts: localhost
+  gather_facts: yes
+  tasks:
+    - name: Fetch Droplet public IP-address
+      set_fact:
+        server_public_ip: "{{ ansible_default_ipv4.address }}"
+
+    - name: Fetch server public key
+      set_fact:
+        server_public_key: "{{ lookup('file', '/etc/wireguard/publickey') }}"
+
+    - name: Generate client private key
+      shell: wg genkey
+      register: client_private_key_result
+      changed_when: false
+
+    - name: Store client private key
+      set_fact:
+       client_private_key: "{{ client_private_key_result.stdout }}"
+
+    - name: Generate client configuration
+      copy:
+        dest: "{{ inventory_hostname }}_client.conf"
+        content: |
+          [Interface]
+          Address = 10.10.0.22
+          PrivateKey = {{ client_private_key }}
+
+          [Peer]
+          PublicKey = {{ server_public_key }}
+          AllowedIPs = 10.10.0.1, 10.8.0.0/24, 10.110.0.0/20
+          Endpoint = {{ server_public_ip }}:51820
+
+#- name: Add user to Wireguard VPN server
+#  hosts: your_server
+#  become: yes
+#  vars:
+#    client_public_key: "client_public_key_here"
+#  tasks:
+#    - name: Add user
+#      shell: wg set wg0 peer {{ client_public_key }} allowed-ips {{ client_private_ip }}
