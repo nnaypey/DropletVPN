@@ -78,7 +78,7 @@
 
           [Peer]
           PublicKey = {{ server_public_key }}
-          AllowedIPs = 10.10.0.1, 10.8.0.0/24, 10.110.0.0/20
+          AllowedIPs = 10.10.0.1/32, 10.8.0.0/24, 10.110.0.0/20
           Endpoint = {{ server_public_ip }}:51820
 
 #- name: Add user to Wireguard VPN server
